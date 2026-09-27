@@ -1,40 +1,60 @@
 import dagre from 'dagre';
 import { Node, Edge, Position } from 'reactflow';
 
-const dagreGraph = new dagre.graphlib.Graph();
-dagreGraph.setDefaultEdgeLabel(() => ({}));
+const nodeWidth = 220;
+const nodeHeight = 85;
 
-const nodeWidth = 200;
-const nodeHeight = 80;
+export const getLayoutedElements = (
+  nodes: Node[],
+  edges: Edge[],
+  direction: 'TB' | 'LR' = 'TB'
+) => {
+  if (nodes.length === 0) {
+    return { nodes: [], edges: [] };
+  }
 
-export const getLayoutedElements = (nodes: Node[], edges: Edge[], direction = 'TB') => {
+  // Create a new dagre graph instance on every layout execution to avoid stale graph state
+  const dagreGraph = new dagre.graphlib.Graph();
+  dagreGraph.setDefaultEdgeLabel(() => ({}));
+  dagreGraph.setGraph({ 
+    rankdir: direction,
+    nodesep: 60,
+    ranksep: 80,
+    marginx: 40,
+    marginy: 40
+  });
+
   const isHorizontal = direction === 'LR';
-  dagreGraph.setGraph({ rankdir: direction });
 
   nodes.forEach((node) => {
     dagreGraph.setNode(node.id, { width: nodeWidth, height: nodeHeight });
   });
 
   edges.forEach((edge) => {
-    dagreGraph.setEdge(edge.source, edge.target);
+    // Only set edges where both source and target exist in the graph
+    if (nodes.some(n => n.id === edge.source) && nodes.some(n => n.id === edge.target)) {
+      dagreGraph.setEdge(edge.source, edge.target);
+    }
   });
 
   dagre.layout(dagreGraph);
 
-  nodes.forEach((node) => {
+  const layoutedNodes = nodes.map((node) => {
     const nodeWithPosition = dagreGraph.node(node.id);
-    node.targetPosition = isHorizontal ? Position.Left : Position.Top;
-    node.sourcePosition = isHorizontal ? Position.Right : Position.Bottom;
+    
+    if (nodeWithPosition) {
+      node.targetPosition = isHorizontal ? Position.Left : Position.Top;
+      node.sourcePosition = isHorizontal ? Position.Right : Position.Bottom;
 
-    // We are shifting the dagre node position (anchor=center center) to the top left
-    // so it matches the React Flow node anchor point (top left).
-    node.position = {
-      x: nodeWithPosition.x - nodeWidth / 2,
-      y: nodeWithPosition.y - nodeHeight / 2,
-    };
+      // Adjust from dagre center-point to React Flow top-left anchor
+      node.position = {
+        x: nodeWithPosition.x - nodeWidth / 2,
+        y: nodeWithPosition.y - nodeHeight / 2,
+      };
+    }
 
     return node;
   });
 
-  return { nodes, edges };
+  return { nodes: layoutedNodes, edges };
 };

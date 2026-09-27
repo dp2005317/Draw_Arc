@@ -1,7 +1,13 @@
 import React, { memo } from 'react';
 import { NodeResizer } from 'reactflow';
 
-function GenericNode({ data, selected }: { data: any, selected: boolean }) {
+export interface GenericNodeData {
+  shape?: string;
+  color?: string;
+  label?: string;
+}
+
+function GenericNode({ data, selected }: { data: GenericNodeData; selected: boolean }) {
   const { shape = 'rect', color = '#1f2937' } = data;
   
   let borderRadius = '0px';

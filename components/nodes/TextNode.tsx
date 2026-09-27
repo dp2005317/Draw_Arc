@@ -1,7 +1,11 @@
 import React, { memo, useState } from 'react';
 import { useReactFlow } from 'reactflow';
 
-function TextNode({ id, data }: { id: string, data: any }) {
+export interface TextNodeData {
+  text?: string;
+}
+
+function TextNode({ id, data }: { id: string; data: TextNodeData }) {
   const [text, setText] = useState(data.text || 'Double click to edit');
   const [isEditing, setIsEditing] = useState(false);
   const { setNodes } = useReactFlow();
