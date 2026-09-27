@@ -185,10 +185,15 @@ export interface GenerateArchitectureResponse {
 
 ## 8. Export Pipeline Specification
 
-DrawArc provides dual-format client-side export:
-1. **High-Resolution PDF (`jspdf`)**:
+DrawArc provides a tri-format client-side export pipeline:
+1. **Interactive Excalidraw Schema (`.excalidraw`)**:
+   - Converts the React Flow graph into the native Excalidraw virtual whiteboard scene format.
+   - Maps cloud nodes to categorized color-coded rectangles/shapes with embedded Virgil hand-drawn typography.
+   - Converts graph edges to binding arrows with start/end element bindings and midpoint label annotations.
+   - Can be opened or dragged directly into [Excalidraw](https://excalidraw.com) for real-time collaborative sketching and live editing.
+2. **High-Resolution PDF (`jspdf`)**:
    - Queries the `.react-flow__viewport` DOM element.
    - Generates an uncompressed high-DPI raster image via `html-to-image` at `pixelRatio: 2`.
    - Calculates aspect-ratio-aware dimensions and automatically assigns portrait or landscape orientation to fit the architecture bounds without clipping.
-2. **PNG Image Export (`html-to-image`)**:
-   - Instant 1-click download for sharing in Slack, Notion, design documents, or technical RFCs.
+3. **PNG Image Export (`html-to-image`)**:
+   - Instant 1-click rasterized image download for sharing in Slack, Notion, design documents, or technical RFCs.

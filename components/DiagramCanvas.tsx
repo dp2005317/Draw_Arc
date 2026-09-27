@@ -25,6 +25,7 @@ import TextNode from './nodes/TextNode';
 import Sidebar from './Sidebar';
 import Toolbar, { InteractionMode } from './Toolbar';
 import { getLayoutedElements } from '@/lib/layout';
+import { downloadExcalidrawFile } from '@/lib/excalidraw';
 import { 
   Loader2, 
   Sparkles, 
@@ -36,7 +37,8 @@ import {
   CheckCircle2,
   AlertCircle,
   X,
-  ArrowRightLeft
+  ArrowRightLeft,
+  PenTool
 } from 'lucide-react';
 
 const nodeTypes = {
@@ -327,6 +329,16 @@ interface ApiEdge {
     }
   }, [nodes]);
 
+  const handleDownloadExcalidraw = useCallback(() => {
+    if (nodes.length === 0) return;
+    const success = downloadExcalidrawFile(nodes, edges);
+    if (success) {
+      showToast('Exported to Excalidraw (.excalidraw)! Open in excalidraw.com', 'success');
+    } else {
+      showToast('Failed to export to Excalidraw', 'error');
+    }
+  }, [nodes, edges]);
+
   const handleClearCanvas = () => {
     if (nodes.length === 0) return;
     if (window.confirm('Are you sure you want to clear the canvas?')) {
@@ -471,6 +483,16 @@ interface ApiEdge {
                   </button>
 
                   {/* Export Actions */}
+                  <button
+                    onClick={handleDownloadExcalidraw}
+                    disabled={isExporting}
+                    className="p-2 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 text-amber-400 hover:text-amber-300 transition-all shadow-lg flex items-center gap-1.5 text-xs font-medium"
+                    title="Export to Excalidraw format (.excalidraw) for editing in excalidraw.com"
+                  >
+                    <PenTool className="w-4 h-4 text-amber-400" />
+                    <span className="hidden sm:inline">Excalidraw</span>
+                  </button>
+
                   <button
                     onClick={handleDownloadPng}
                     disabled={isExporting}

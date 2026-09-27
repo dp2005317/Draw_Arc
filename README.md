@@ -35,7 +35,8 @@ For a deep-dive technical blueprint explaining all architectural decisions, fail
   - **Modes**: Pan (`H`), Select/Move (`V`), Rectangle (`R`), Circle (`C`), Diamond (`D`), Text Note (`T`), and Eraser (`E`).
   - **Connecting**: Drag handles to create animated directional data pipelines with custom labels.
   - **Inline Renaming**: Double-click any node to update labels in real-time.
-- 📄 **Dual-Format Export**:
+- 📄 **Tri-Format Export**:
+  - **Excalidraw (.excalidraw)**: Export directly to native Excalidraw JSON format with hand-drawn styling and bindings, ready to open or drag-and-drop into [Excalidraw](https://excalidraw.com).
   - **High-DPI PDF**: Auto-calculates canvas bounding box and aspect ratio for crisp vector documentation.
   - **PNG Image**: Instant 1-click export for technical RFCs, Notion docs, and Slack.
 - 🔒 **Zero-Security-Leakage Guarantee**: API keys remain strictly confined to the server-side Edge route and are never exposed in the client-side JavaScript bundle or git tracking.
