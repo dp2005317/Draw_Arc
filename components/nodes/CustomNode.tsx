@@ -120,9 +120,9 @@ export default function CustomNode({
         minHeight={65} 
       />
       <div 
-        className={`relative w-full h-full px-3.5 py-2.5 rounded-2xl bg-neutral-900/95 backdrop-blur-md 
+        className={`relative w-full h-full px-3.5 py-2.5 rounded-2xl theme-node-card backdrop-blur-md 
           border ${typeConfig.color} shadow-xl flex items-center space-x-3 group transition-all duration-200 
-          hover:shadow-2xl ${selected ? 'ring-2 ring-indigo-500/80 border-transparent shadow-indigo-500/20' : ''}
+          hover:shadow-2xl ${selected ? 'ring-2 ring-indigo-500/80 shadow-indigo-500/20' : ''}
         `}
         onDoubleClick={handleDoubleClick}
       >
@@ -131,29 +131,29 @@ export default function CustomNode({
           id="target-top"
           type="target" 
           position={Position.Top} 
-          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-neutral-900 opacity-60 group-hover:opacity-100 transition-opacity" 
+          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-[var(--node-bg)] opacity-60 group-hover:opacity-100 transition-opacity" 
         />
         <Handle 
           id="target-left"
           type="target" 
           position={Position.Left} 
-          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-neutral-900 opacity-60 group-hover:opacity-100 transition-opacity" 
+          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-[var(--node-bg)] opacity-60 group-hover:opacity-100 transition-opacity" 
         />
         <Handle 
           id="source-right"
           type="source" 
           position={Position.Right} 
-          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-neutral-900 opacity-60 group-hover:opacity-100 transition-opacity" 
+          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-[var(--node-bg)] opacity-60 group-hover:opacity-100 transition-opacity" 
         />
         <Handle 
           id="source-bottom"
           type="source" 
           position={Position.Bottom} 
-          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-neutral-900 opacity-60 group-hover:opacity-100 transition-opacity" 
+          className="w-2.5 h-2.5 !bg-indigo-400 border-2 !border-[var(--node-bg)] opacity-60 group-hover:opacity-100 transition-opacity" 
         />
 
         {/* Icon Container */}
-        <div className="p-2 bg-neutral-800/90 rounded-xl shrink-0 border border-neutral-700/60 shadow-inner">
+        <div className="p-2 theme-node-icon rounded-xl shrink-0 border shadow-inner">
           {typeConfig.icon}
         </div>
 
@@ -168,7 +168,7 @@ export default function CustomNode({
           {isEditing ? (
             <input
               autoFocus
-              className="text-xs text-neutral-100 font-semibold bg-neutral-800 border border-indigo-500 rounded px-1.5 py-0.5 outline-none w-full"
+              className="nodrag nopan nowheel text-xs theme-node-text font-semibold bg-transparent border border-indigo-500 rounded px-1.5 py-0.5 outline-none w-full"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               onBlur={handleBlur}
@@ -176,7 +176,7 @@ export default function CustomNode({
             />
           ) : (
             <div 
-              className="text-xs text-neutral-100 font-semibold cursor-text select-none truncate hover:text-white"
+              className="text-xs theme-node-text font-semibold cursor-text select-none truncate opacity-90 hover:opacity-100"
               title="Double click to rename"
             >
               {data.label}

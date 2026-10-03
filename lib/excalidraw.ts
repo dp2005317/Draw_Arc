@@ -1,4 +1,5 @@
 import { Node, Edge } from 'reactflow';
+import { DrawingStroke } from './collaboration';
 
 export interface ExcalidrawElement {
   id: string;
@@ -46,13 +47,13 @@ function generateSeed(): number {
   return Math.floor(Math.random() * 2000000000);
 }
 
-export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
-  if (nodes.length === 0) return null;
+export function exportToExcalidraw(nodes: Node[], edges: Edge[], drawings: DrawingStroke[] = []) {
+  if (nodes.length === 0 && drawings.length === 0) return null;
 
   const elements: ExcalidrawElement[] = [];
   const nodePositionMap = new Map<string, { x: number; y: number; width: number; height: number }>();
 
-  // 1. Convert Nodes to Excalidraw Elements (Rectangles / Shapes + Embedded Text)
+  // 1. Convert Nodes to Excalidraw Elements
   nodes.forEach((node) => {
     const width = Number(node.style?.width) || 200;
     const height = Number(node.style?.height) || 75;
@@ -62,8 +63,8 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
 
     const groupId = `group-${node.id}`;
     const nodeType = node.data?.type || 'service';
-    const label = node.data?.label || node.data?.text || 'Service Node';
-    const colors = COLOR_MAP[nodeType] || { stroke: '#6366f1', bg: '#312e8130' };
+    const label = node.data?.label || node.data?.text || 'Node';
+    const colors = COLOR_MAP[nodeType] || { stroke: node.data?.strokeColor || '#6366f1', bg: node.data?.color || '#312e8130' };
 
     let excalidrawType = 'rectangle';
     let roundness: { type: number } | null = { type: 3 };
@@ -79,10 +80,13 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
       }
     } else if (node.type === 'text') {
       excalidrawType = 'text';
+    } else if (node.type === 'sticky') {
+      excalidrawType = 'rectangle';
+      roundness = { type: 2 };
     }
 
     if (excalidrawType !== 'text') {
-      // Create the container shape element
+      // Shape element
       const shapeElement: ExcalidrawElement = {
         id: node.id,
         type: excalidrawType,
@@ -94,10 +98,10 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
         strokeColor: colors.stroke,
         backgroundColor: colors.bg,
         fillStyle: 'solid',
-        strokeWidth: 2,
+        strokeWidth: node.data?.strokeWidth || 2,
         strokeStyle: 'solid',
         roughness: 1,
-        opacity: 100,
+        opacity: node.data?.opacity || 100,
         groupIds: [groupId],
         frameId: null,
         roundness,
@@ -108,11 +112,11 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
         boundElements: [{ id: `text-${node.id}`, type: 'text' }],
         updated: Date.now(),
         link: null,
-        locked: false,
+        locked: Boolean(node.data?.isLocked),
       };
       elements.push(shapeElement);
 
-      // Create text label inside the shape
+      // Label inside shape
       const textElement: ExcalidrawElement = {
         id: `text-${node.id}`,
         type: 'text',
@@ -151,7 +155,7 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
       };
       elements.push(textElement);
     } else {
-      // Pure text note
+      // Standalone text note
       const textElement: ExcalidrawElement = {
         id: node.id,
         type: 'text',
@@ -199,7 +203,6 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
 
     if (!source || !target) return;
 
-    // Connect from center/bottom of source to center/top of target
     const startX = source.x + source.width / 2;
     const startY = source.y + source.height;
     const endX = target.x + target.width / 2;
@@ -207,7 +210,6 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
 
     const deltaX = endX - startX;
     const deltaY = endY - startY;
-
     const arrowId = edge.id || `arrow-${index}`;
 
     const arrowElement: ExcalidrawElement = {
@@ -257,51 +259,52 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
     };
 
     elements.push(arrowElement);
+  });
 
-    // Optional Edge Label (e.g. 'HTTPS', 'gRPC', 'Read/Write')
-    if (edge.label && typeof edge.label === 'string') {
-      const midX = startX + deltaX / 2 - 25;
-      const midY = startY + deltaY / 2 - 12;
+  // 3. Convert Freehand Drawing Strokes to Excalidraw freedraw elements
+  drawings.forEach((drawing) => {
+    if (!drawing.points || drawing.points.length === 0) return;
 
-      const labelElement: ExcalidrawElement = {
-        id: `label-${arrowId}`,
-        type: 'text',
-        x: midX,
-        y: midY,
-        width: Math.max(50, edge.label.length * 8),
-        height: 20,
-        angle: 0,
-        strokeColor: '#cbd5e1',
-        backgroundColor: '#18181b',
-        fillStyle: 'solid',
-        strokeWidth: 1,
-        strokeStyle: 'solid',
-        roughness: 0,
-        opacity: 100,
-        groupIds: [],
-        frameId: null,
-        roundness: null,
-        seed: generateSeed(),
-        version: 1,
-        versionNonce: generateSeed(),
-        isDeleted: false,
-        boundElements: null,
-        updated: Date.now(),
-        link: null,
-        locked: false,
-        text: edge.label,
-        fontSize: 12,
-        fontFamily: 1,
-        textAlign: 'center',
-        verticalAlign: 'middle',
-        baseline: 12,
-        containerId: null,
-        originalText: edge.label,
-        lineHeight: 1.25,
-      };
+    const minX = Math.min(...drawing.points.map((p) => p.x));
+    const minY = Math.min(...drawing.points.map((p) => p.y));
+    const maxX = Math.max(...drawing.points.map((p) => p.x));
+    const maxY = Math.max(...drawing.points.map((p) => p.y));
 
-      elements.push(labelElement);
-    }
+    const relPoints = drawing.points.map((p) => [p.x - minX, p.y - minY]);
+
+    const freedrawElement: ExcalidrawElement = {
+      id: drawing.id,
+      type: 'freedraw',
+      x: minX,
+      y: minY,
+      width: Math.max(1, maxX - minX),
+      height: Math.max(1, maxY - minY),
+      angle: 0,
+      strokeColor: drawing.color,
+      backgroundColor: 'transparent',
+      fillStyle: 'solid',
+      strokeWidth: drawing.width,
+      strokeStyle: 'solid',
+      roughness: 1,
+      opacity: Math.round(drawing.opacity * 100),
+      groupIds: [],
+      frameId: null,
+      roundness: null,
+      seed: generateSeed(),
+      version: 1,
+      versionNonce: generateSeed(),
+      isDeleted: false,
+      boundElements: null,
+      updated: Date.now(),
+      link: null,
+      locked: Boolean(drawing.isLocked),
+      points: relPoints,
+      pressures: [],
+      simulatePressure: true,
+      lastCommittedPoint: null,
+    };
+
+    elements.push(freedrawElement);
   });
 
   const excalidrawScene = {
@@ -319,8 +322,13 @@ export function exportToExcalidraw(nodes: Node[], edges: Edge[]) {
   return excalidrawScene;
 }
 
-export function downloadExcalidrawFile(nodes: Node[], edges: Edge[], filename = 'drawarc-architecture.excalidraw') {
-  const scene = exportToExcalidraw(nodes, edges);
+export function downloadExcalidrawFile(
+  nodes: Node[],
+  edges: Edge[],
+  drawings: DrawingStroke[] = [],
+  filename = 'drawarc-architecture.excalidraw'
+) {
+  const scene = exportToExcalidraw(nodes, edges, drawings);
   if (!scene) return false;
 
   const jsonString = JSON.stringify(scene, null, 2);
