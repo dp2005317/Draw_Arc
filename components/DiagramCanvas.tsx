@@ -22,16 +22,16 @@ import CustomNode from './nodes/CustomNode';
 import GenericNode from './nodes/GenericNode';
 import TextNode from './nodes/TextNode';
 import StickyNoteNode from './nodes/StickyNoteNode';
-import Sidebar from './Sidebar';
+import StudioLeftRail, { RailTab } from './StudioLeftRail';
+import EditInspector from './EditInspector';
 import Toolbar, { InteractionMode } from './Toolbar';
-import PropertyBar from './PropertyBar';
-import LayersPanel from './LayersPanel';
 import CanvasOverlayDrawing from './CanvasOverlayDrawing';
 import LiveCursors from './LiveCursors';
 import ShareModal from './ShareModal';
 
 import { getLayoutedElements } from '@/lib/layout';
-import { downloadExcalidrawFile } from '@/lib/excalidraw';
+import { exportToExcalidraw, downloadExcalidrawFile } from '@/lib/excalidraw';
+import { synthesizeArchitecture } from '@/app/api/generate/route';
 import { 
   DrawingStroke, 
   Collaborator, 
@@ -43,22 +43,17 @@ import {
 import { 
   Loader2, 
   Sparkles, 
-  PanelLeft, 
-  LayoutGrid, 
   Trash2, 
-  Image as ImageIcon,
-  FileDown,
   CheckCircle2,
   AlertCircle,
   X,
-  ArrowRightLeft,
   PenTool,
   Share2,
   Sun,
   Moon,
-  Layers,
   Undo2,
-  Redo2
+  Redo2,
+  SlidersHorizontal
 } from 'lucide-react';
 
 const nodeTypes = {
@@ -101,8 +96,8 @@ function InnerDiagramCanvas() {
   const [activeWidth, setActiveWidth] = useState<number>(2);
 
   // UI Panels
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const [isLayersOpen, setIsLayersOpen] = useState(false);
+  const [activeLeftTab, setActiveLeftTab] = useState<RailTab>(null);
+  const [isEditPanelOpen, setIsEditPanelOpen] = useState(true);
   const [isShareOpen, setIsShareOpen] = useState(false);
   
   const [theme, setTheme] = useState<'dark' | 'light'>(() => {
@@ -139,6 +134,10 @@ function InnerDiagramCanvas() {
 
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null);
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
+
+  // Selected element detection
+  const selectedNode = useMemo(() => nodes.find((n) => n.selected) || null, [nodes]);
+  const selectedStroke = useMemo(() => drawings.find((d) => d.id === selectedStrokeId) || null, [drawings, selectedStrokeId]);
 
   // Synchronize document theme attribute
   useEffect(() => {
@@ -302,194 +301,164 @@ function InnerDiagramCanvas() {
     setSelectedStrokeId(null);
 
     pushStateUpdate(updatedNodes, updatedEdges, updatedDrawings, true);
-    showToast('Deleted item', 'info');
+    showToast('Item deleted', 'info');
   }, [nodes, edges, drawings, selectedStrokeId, pushStateUpdate, setNodes, setEdges, showToast]);
 
-  // Keyboard Shortcuts: Undo (Ctrl+Z), Redo (Ctrl+Y / Cmd+Shift+Z), Delete (Delete / Backspace)
+  // Keyboard Shortcuts: Delete, Undo, Redo, Tools
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const activeEl = document.activeElement;
       const isInput = activeEl?.tagName === 'INPUT' || activeEl?.tagName === 'TEXTAREA' || (activeEl as HTMLElement)?.isContentEditable;
-
-      // Don't hijack keyboard shortcuts when user is typing in a text field
       if (isInput) return;
 
-      // Delete / Backspace
-      if (e.key === 'Delete' || e.key === 'Backspace') {
-        e.preventDefault();
-        handleDeleteSelected();
-        return;
-      }
-
-      // Undo: Ctrl+Z / Cmd+Z (without shift)
+      // Undo: Ctrl+Z / Cmd+Z
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
         return;
       }
 
-      // Redo: Ctrl+Y or Cmd+Shift+Z
-      if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
-          ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && e.shiftKey)) {
+      // Redo: Ctrl+Y / Cmd+Shift+Z
+      if (((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') || ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')) {
         e.preventDefault();
         handleRedo();
         return;
       }
 
-      // Tool shortcut keys
-      if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        const key = e.key.toLowerCase();
-        if (key === 'h') setInteractionMode('pan');
-        else if (key === 'v') setInteractionMode('select');
-        else if (key === 'p') setInteractionMode('pen');
-        else if (key === 'b') setInteractionMode('highlighter');
-        else if (key === 'r') setInteractionMode('rect');
-        else if (key === 'c') setInteractionMode('circle');
-        else if (key === 'd') setInteractionMode('diamond');
-        else if (key === 's') setInteractionMode('sticky');
-        else if (key === 't') setInteractionMode('text');
-        else if (key === 'e') setInteractionMode('eraser');
+      // Delete: Delete or Backspace
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const hasSelection = nodes.some((n) => n.selected) || edges.some((e) => e.selected) || selectedStrokeId !== null;
+        if (hasSelection) {
+          e.preventDefault();
+          handleDeleteSelected();
+          return;
+        }
       }
+
+      // Tool switching
+      const key = e.key.toLowerCase();
+      if (key === 'h') setInteractionMode('pan');
+      else if (key === 'v') setInteractionMode('select');
+      else if (key === 'p') setInteractionMode('pen');
+      else if (key === 'b') setInteractionMode('highlighter');
+      else if (key === 'r') setInteractionMode('rect');
+      else if (key === 'c') setInteractionMode('circle');
+      else if (key === 'd') setInteractionMode('diamond');
+      else if (key === 's') setInteractionMode('sticky');
+      else if (key === 't') setInteractionMode('text');
+      else if (key === 'e') setInteractionMode('eraser');
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleDeleteSelected, handleUndo, handleRedo]);
+  }, [handleUndo, handleRedo, handleDeleteSelected, nodes, edges, selectedStrokeId]);
 
-  // Room URL Synchronization & BroadcastChannel
+  // BroadcastChannel & Remote Room Synchronization
   useEffect(() => {
-    if (typeof window === 'undefined') return;
+    const channel = new BroadcastChannel(`drawarc-room-${roomId}`);
+    broadcastChannelRef.current = channel;
 
-    const urlParams = new URLSearchParams(window.location.search);
-    if (!urlParams.get('room')) {
-      const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set('room', roomId);
-      window.history.replaceState({}, '', newUrl.toString());
-    }
+    channel.onmessage = (event) => {
+      const data = event.data;
+      if (!data || data.senderId === currentUser.id) return;
 
-    try {
-      const channel = new BroadcastChannel(`drawarc-room-${roomId}`);
-      broadcastChannelRef.current = channel;
-
-      channel.onmessage = (event) => {
-        const data = event.data;
-        if (!data || data.senderId === currentUser.id) return;
-
-        if (data.type === 'SYNC_STATE') {
-          if (data.nodes) setNodes(data.nodes);
-          if (data.edges) setEdges(data.edges);
-          if (data.drawings) setDrawings(data.drawings);
-        } else if (data.type === 'CURSOR_MOVE') {
-          setCollaborators((prev) => ({
-            ...prev,
-            [data.senderId]: {
-              id: data.senderId,
-              name: data.senderName,
-              color: data.senderColor,
-              cursor: data.cursor,
-              lastActive: Date.now(),
-            },
-          }));
-        }
-      };
-    } catch {
-      // Fallback
-    }
-
-    return () => {
-      broadcastChannelRef.current?.close();
-    };
-  }, [roomId, currentUser.id, setNodes, setEdges]);
-
-  // Periodic Serverless Room Sync Polling
-  useEffect(() => {
-    if (!roomId) return;
-
-    let isMounted = true;
-
-    const syncWithServer = async () => {
-      try {
-        const res = await fetch(`/api/room/${roomId}`, { cache: 'no-store' });
-        if (!res.ok) return;
-        const data = await res.json();
-
-        if (isMounted && data && data.updatedAt > lastSyncTimestampRef.current) {
-          lastSyncTimestampRef.current = data.updatedAt;
-          if (Array.isArray(data.nodes) && data.nodes.length > 0 && nodes.length === 0) {
-            setNodes(data.nodes);
-          }
-          if (Array.isArray(data.edges) && data.edges.length > 0 && edges.length === 0) {
-            setEdges(data.edges);
-          }
-          if (Array.isArray(data.drawings) && data.drawings.length > 0 && drawings.length === 0) {
-            setDrawings(data.drawings);
-          }
-          if (data.collaborators) {
-            setCollaborators(data.collaborators);
-          }
-        }
-      } catch {
-        // Silently tolerate transient offline/network pauses
+      if (data.type === 'SYNC_STATE') {
+        setNodes(data.nodes || []);
+        setEdges(data.edges || []);
+        setDrawings(data.drawings || []);
+      } else if (data.type === 'CURSOR') {
+        setCollaborators((prev) => ({
+          ...prev,
+          [data.senderId]: {
+            id: data.senderId,
+            name: data.userName,
+            color: data.userColor,
+            cursor: data.cursor,
+            lastActive: Date.now(),
+          },
+        }));
       }
     };
 
-    syncWithServer();
-    const interval = setInterval(syncWithServer, 2500);
+    const pollRemoteRoom = async () => {
+      try {
+        const res = await fetch(`/api/room/${roomId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+
+        if (data.updatedAt && data.updatedAt > lastSyncTimestampRef.current) {
+          lastSyncTimestampRef.current = data.updatedAt;
+          if (Array.isArray(data.nodes)) setNodes(data.nodes);
+          if (Array.isArray(data.edges)) setEdges(data.edges);
+          if (Array.isArray(data.drawings)) setDrawings(data.drawings);
+        }
+
+        if (data.collaborators) {
+          const activeOthers: Record<string, Collaborator> = {};
+          const now = Date.now();
+          Object.entries(data.collaborators as Record<string, Collaborator>).forEach(([id, c]) => {
+            if (id !== currentUser.id && now - c.lastActive < 30000) {
+              activeOthers[id] = c;
+            }
+          });
+          setCollaborators(activeOthers);
+        }
+      } catch {}
+    };
+
+    pollRemoteRoom();
+    const interval = setInterval(pollRemoteRoom, 2500);
 
     return () => {
-      isMounted = false;
       clearInterval(interval);
+      channel.close();
     };
-  }, [roomId, nodes.length, edges.length, drawings.length, setNodes, setEdges]);
+  }, [roomId, currentUser.id, setNodes, setEdges]);
 
-  // Cursor Move Broadcast
+  // Broadcast cursor movements to collaborators
   const handlePointerMoveCanvas = useCallback(
     (e: React.PointerEvent) => {
       if (!reactFlowInstance || !reactFlowWrapper.current) return;
       const bounds = reactFlowWrapper.current.getBoundingClientRect();
-      const canvasPt = reactFlowInstance.project({
+      const canvasPos = reactFlowInstance.project({
         x: e.clientX - bounds.left,
         y: e.clientY - bounds.top,
       });
 
       if (broadcastChannelRef.current) {
         broadcastChannelRef.current.postMessage({
-          type: 'CURSOR_MOVE',
+          type: 'CURSOR',
           senderId: currentUser.id,
-          senderName: currentUser.name,
-          senderColor: currentUser.color,
-          cursor: canvasPt,
+          userName: currentUser.name,
+          userColor: currentUser.color,
+          cursor: canvasPos,
         });
       }
     },
     [reactFlowInstance, currentUser]
   );
 
-  // Connection Handler
+  // Connect Nodes
   const onConnect = useCallback(
-    (params: Connection | Edge) => {
-      setEdges((eds) => {
-        const nextEds = addEdge(
-          {
-            ...params,
-            type: 'smoothstep',
-            animated: true,
-            style: { stroke: activeColor || '#6366f1', strokeWidth: 2 },
-            labelStyle: { fill: theme === 'light' ? '#0f172a' : '#ffffff', fontWeight: 600, fontSize: 11 },
-            labelBgStyle: { fill: theme === 'light' ? '#ffffff' : '#171717', fillOpacity: 0.95 },
-            labelBgPadding: [6, 4] as [number, number],
-            labelBgBorderRadius: 6,
-          },
-          eds
-        );
-        pushStateUpdate(nodes, nextEds, drawings, true);
-        return nextEds;
-      });
+    (params: Connection) => {
+      if (!params.source || !params.target) return;
+      const newEdge: Edge = {
+        ...params,
+        source: params.source,
+        target: params.target,
+        id: `e-${params.source}-${params.target}-${Date.now()}`,
+        type: 'smoothstep',
+        animated: true,
+        style: { stroke: activeColor || '#6366f1', strokeWidth: 2 },
+      };
+      const updatedEdges = addEdge(newEdge, edges);
+      setEdges(updatedEdges);
+      pushStateUpdate(nodes, updatedEdges, drawings, true);
     },
-    [setEdges, activeColor, theme, nodes, drawings, pushStateUpdate]
+    [edges, nodes, drawings, activeColor, pushStateUpdate, setEdges]
   );
 
-  // Drag & Drop from Elements
+  // Drag-and-drop Elements onto Canvas
   const onDragOver = useCallback((event: React.DragEvent) => {
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
@@ -498,11 +467,13 @@ function InnerDiagramCanvas() {
   const onDrop = useCallback(
     (event: React.DragEvent) => {
       event.preventDefault();
-      const bounds = reactFlowWrapper.current?.getBoundingClientRect();
-      const dataString = event.dataTransfer.getData('application/reactflow');
-      if (!dataString || !bounds || !reactFlowInstance) return;
+      if (!reactFlowWrapper.current || !reactFlowInstance) return;
 
-      const { type, label } = JSON.parse(dataString);
+      const bounds = reactFlowWrapper.current.getBoundingClientRect();
+      const rawData = event.dataTransfer.getData('application/reactflow');
+      if (!rawData) return;
+
+      const data = JSON.parse(rawData);
       const position = reactFlowInstance.project({
         x: event.clientX - bounds.left,
         y: event.clientY - bounds.top,
@@ -510,95 +481,28 @@ function InnerDiagramCanvas() {
 
       const newNode: Node = {
         id: `node-${Date.now()}`,
-        type: 'custom',
+        type: data.type === 'shape' ? 'shape' : 'custom',
         position,
-        data: { label, type },
+        data: { 
+          label: data.label, 
+          type: data.type,
+          shape: data.shape || 'rect',
+          color: theme === 'light' ? '#ffffff' : '#18181b',
+          strokeColor: activeColor || '#6366f1',
+          strokeWidth: activeWidth || 2,
+          strokeStyle: 'solid',
+          opacity: 100
+        },
+        selected: true,
       };
 
-      const nextNodes = [...nodes, newNode];
-      setNodes(nextNodes);
-      pushStateUpdate(nextNodes, edges, drawings, true);
-      showToast(`Added ${label}`, 'info');
+      const updatedNodes = [...nodes.map((n) => ({ ...n, selected: false })), newNode];
+      setNodes(updatedNodes);
+      pushStateUpdate(updatedNodes, edges, drawings, true);
+      showToast(`Added ${data.label}`, 'success');
     },
-    [reactFlowInstance, nodes, edges, drawings, setNodes, pushStateUpdate, showToast]
+    [reactFlowInstance, nodes, edges, drawings, activeColor, activeWidth, theme, pushStateUpdate, setNodes, showToast]
   );
-
-  // Add from Sidebar Handlers
-  const handleAddNodeFromSidebar = (type: string, label: string) => {
-    if (!reactFlowInstance || !reactFlowWrapper.current) return;
-    const bounds = reactFlowWrapper.current.getBoundingClientRect();
-    const position = reactFlowInstance.project({
-      x: bounds.width / 2 + (Math.random() - 0.5) * 80,
-      y: bounds.height / 2 + (Math.random() - 0.5) * 80,
-    });
-
-    const newNode: Node = {
-      id: `node-${Date.now()}`,
-      type: 'custom',
-      position,
-      data: { label, type },
-    };
-
-    const nextNodes = [...nodes, newNode];
-    setNodes(nextNodes);
-    pushStateUpdate(nextNodes, edges, drawings, true);
-    showToast(`Added ${label}`, 'info');
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
-  };
-
-  const handleAddShapeFromSidebar = (shape: string, label: string) => {
-    if (!reactFlowInstance || !reactFlowWrapper.current) return;
-    const bounds = reactFlowWrapper.current.getBoundingClientRect();
-    const position = reactFlowInstance.project({
-      x: bounds.width / 2 + (Math.random() - 0.5) * 80,
-      y: bounds.height / 2 + (Math.random() - 0.5) * 80,
-    });
-
-    const newNode: Node = {
-      id: `shape-${Date.now()}`,
-      type: 'shape',
-      position,
-      data: { 
-        shape, 
-        label, 
-        color: theme === 'light' ? '#ffffff' : '#18181b',
-        strokeColor: activeColor,
-        strokeWidth: 2,
-        strokeStyle: 'solid',
-        opacity: 100
-      },
-      style: { width: 120, height: 120 },
-    };
-
-    const nextNodes = [...nodes, newNode];
-    setNodes(nextNodes);
-    pushStateUpdate(nextNodes, edges, drawings, true);
-    showToast(`Added ${label}`, 'info');
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
-  };
-
-  const handleAddStickyFromSidebar = (color: string) => {
-    if (!reactFlowInstance || !reactFlowWrapper.current) return;
-    const bounds = reactFlowWrapper.current.getBoundingClientRect();
-    const position = reactFlowInstance.project({
-      x: bounds.width / 2 + (Math.random() - 0.5) * 80,
-      y: bounds.height / 2 + (Math.random() - 0.5) * 80,
-    });
-
-    const newNode: Node = {
-      id: `sticky-${Date.now()}`,
-      type: 'sticky',
-      position,
-      data: { color, text: 'New Note...', author: currentUser.name, isEditing: true },
-      style: { width: 160, height: 140 },
-    };
-
-    const nextNodes = [...nodes, newNode];
-    setNodes(nextNodes);
-    pushStateUpdate(nextNodes, edges, drawings, true);
-    showToast('Added Sticky Note', 'info');
-    if (window.innerWidth < 768) setIsSidebarOpen(false);
-  };
 
   // Direct Click to Add Shapes / Text / Stickies on Canvas
   const handlePaneClick = (event: React.MouseEvent) => {
@@ -622,7 +526,7 @@ function InnerDiagramCanvas() {
           data: { 
             text: 'Write something...', 
             isEditing: true, 
-            fontSize: 20, 
+            fontSize: 22, 
             color: theme === 'light' ? '#0f172a' : '#f4f4f5' 
           },
           selected: true,
@@ -633,7 +537,7 @@ function InnerDiagramCanvas() {
           type: 'sticky',
           position,
           data: { color: 'yellow', text: 'New Note', author: currentUser.name, isEditing: true },
-          style: { width: 160, height: 140 },
+          style: { width: 170, height: 150 },
           selected: true,
         };
       } else {
@@ -650,19 +554,113 @@ function InnerDiagramCanvas() {
             strokeStyle: 'solid',
             opacity: 100
           },
-          style: { width: 110, height: 110 },
+          style: { width: 120, height: 120 },
           selected: true,
         };
       }
 
-      // Unselect existing nodes
       const nextNodes: Node[] = [...nodes.map((n) => ({ ...n, selected: false })), newNode];
       setNodes(nextNodes);
       pushStateUpdate(nextNodes, edges, drawings, true);
       setInteractionMode('select');
-      showToast(`Created ${interactionMode} element`, 'info');
+      setIsEditPanelOpen(true);
     }
   };
+
+  // Add Elements via Left Rail
+  const handleAddNodeFromRail = (type: string, label: string) => {
+    if (!reactFlowWrapper.current || !reactFlowInstance) return;
+    const center = reactFlowInstance.project({
+      x: reactFlowWrapper.current.clientWidth / 2,
+      y: reactFlowWrapper.current.clientHeight / 2,
+    });
+    const newNode: Node = {
+      id: `node-${Date.now()}`,
+      type: 'custom',
+      position: center,
+      data: { label, type },
+      selected: true,
+    };
+    const nextNodes = [...nodes.map((n) => ({ ...n, selected: false })), newNode];
+    setNodes(nextNodes);
+    pushStateUpdate(nextNodes, edges, drawings, true);
+    showToast(`Added ${label}`, 'success');
+  };
+
+  const handleAddShapeFromRail = (shape: string, label: string) => {
+    if (!reactFlowWrapper.current || !reactFlowInstance) return;
+    const center = reactFlowInstance.project({
+      x: reactFlowWrapper.current.clientWidth / 2,
+      y: reactFlowWrapper.current.clientHeight / 2,
+    });
+    const newNode: Node = {
+      id: `shape-${Date.now()}`,
+      type: 'shape',
+      position: center,
+      data: {
+        shape,
+        label,
+        color: theme === 'light' ? '#ffffff' : '#18181b',
+        strokeColor: activeColor || '#6366f1',
+        strokeWidth: activeWidth || 2,
+        strokeStyle: 'solid',
+        opacity: 100,
+      },
+      style: { width: 120, height: 120 },
+      selected: true,
+    };
+    const nextNodes = [...nodes.map((n) => ({ ...n, selected: false })), newNode];
+    setNodes(nextNodes);
+    pushStateUpdate(nextNodes, edges, drawings, true);
+    showToast(`Added ${label}`, 'success');
+  };
+
+  const handleAddStickyFromRail = (color: string) => {
+    if (!reactFlowWrapper.current || !reactFlowInstance) return;
+    const center = reactFlowInstance.project({
+      x: reactFlowWrapper.current.clientWidth / 2,
+      y: reactFlowWrapper.current.clientHeight / 2,
+    });
+    const newNode: Node = {
+      id: `sticky-${Date.now()}`,
+      type: 'sticky',
+      position: center,
+      data: { color, text: 'New Note...', author: currentUser.name, isEditing: true },
+      style: { width: 170, height: 150 },
+      selected: true,
+    };
+    const nextNodes = [...nodes.map((n) => ({ ...n, selected: false })), newNode];
+    setNodes(nextNodes);
+    pushStateUpdate(nextNodes, edges, drawings, true);
+    showToast('Added Sticky Note', 'success');
+  };
+
+  // Quick Insert functions for Edit Inspector
+  const handleAddTextQuick = useCallback((fontSize = 24, isBold = false) => {
+    if (!reactFlowWrapper.current || !reactFlowInstance) return;
+    const center = reactFlowInstance.project({
+      x: reactFlowWrapper.current.clientWidth / 2,
+      y: reactFlowWrapper.current.clientHeight / 2,
+    });
+    const newNode: Node = {
+      id: `text-${Date.now()}`,
+      type: 'text',
+      position: center,
+      data: {
+        text: 'Write something...',
+        isEditing: true,
+        fontSize,
+        isBold,
+        color: theme === 'light' ? '#0f172a' : '#f4f4f5',
+      },
+      selected: true,
+    };
+    const nextNodes = [...nodes.map((n) => ({ ...n, selected: false })), newNode];
+    setNodes(nextNodes);
+    setIsEditPanelOpen(true);
+    pushStateUpdate(nextNodes, edges, drawings, true);
+    showToast('Added Text element', 'info');
+  }, [reactFlowInstance, theme, nodes, edges, drawings, pushStateUpdate, setNodes, showToast]);
 
   // Auto Layout
   const applyLayout = useCallback(
@@ -691,7 +689,7 @@ function InnerDiagramCanvas() {
     showToast(`Layout set to ${nextDir === 'TB' ? 'Top-to-Bottom' : 'Left-to-Right'}`, 'info');
   };
 
-  // AI Generator
+  // Resilient AI Generator with Infallible Client-side Fallback
   const handleGenerate = async (e?: React.FormEvent, customPrompt?: string) => {
     if (e) e.preventDefault();
     const query = customPrompt || prompt;
@@ -701,35 +699,53 @@ function InnerDiagramCanvas() {
     showToast('Synthesizing production architecture with AI...', 'info');
 
     try {
-      const res = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: query }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || data.error) throw new Error(data.error || 'Failed to generate diagram');
-      if (!data.nodes || !data.edges) throw new Error('Invalid architecture schema returned');
-
-      interface ApiNode {
+      interface ArchDataNode {
         id: string;
         type?: string;
         data: { label: string; type: string };
       }
-      interface ApiEdge {
+      interface ArchDataEdge {
         id: string;
         source: string;
         target: string;
         label?: string;
         animated?: boolean;
       }
+      interface ArchPayload {
+        nodes: ArchDataNode[];
+        edges: ArchDataEdge[];
+      }
 
-      const newNodes = (data.nodes as ApiNode[]).map((node) => ({
+      let data: ArchPayload | null = null;
+
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: query }),
+        });
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json && Array.isArray(json.nodes) && Array.isArray(json.edges)) {
+            data = json as ArchPayload;
+          }
+        }
+      } catch {
+        // Fallback to local client synthesis
+      }
+
+      // If remote API encountered any error, rate-limit, or network issue, synthesize immediately locally!
+      if (!data) {
+        data = synthesizeArchitecture(query) as ArchPayload;
+      }
+
+      const newNodes = data.nodes.map((node) => ({
         ...node,
         position: { x: 0, y: 0 },
       }));
 
-      const newEdges = (data.edges as ApiEdge[]).map((edge) => ({
+      const newEdges = data.edges.map((edge) => ({
         ...edge,
         type: 'smoothstep',
         animated: edge.animated ?? true,
@@ -751,7 +767,29 @@ function InnerDiagramCanvas() {
     }
   };
 
-  // Export Handlers
+  // Direct Excalidraw Opener + Clipboard Copy + Backup File
+  const handleOpenExcalidraw = useCallback(() => {
+    if (nodes.length === 0 && drawings.length === 0) {
+      window.open('https://excalidraw.com', '_blank');
+      showToast('Opened Excalidraw.com in a new tab!', 'info');
+      return;
+    }
+
+    const scene = exportToExcalidraw(nodes, edges, drawings);
+    if (scene) {
+      const jsonStr = JSON.stringify(scene, null, 2);
+      if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(jsonStr).catch(() => {});
+      }
+      downloadExcalidrawFile(nodes, edges, drawings);
+      window.open('https://excalidraw.com', '_blank');
+      showToast('Opening Excalidraw.com! Diagram JSON copied to clipboard — press Ctrl+V / ⌘V in Excalidraw to paste your canvas!', 'success');
+    } else {
+      window.open('https://excalidraw.com', '_blank');
+    }
+  }, [nodes, edges, drawings, showToast]);
+
+  // Export PDF
   const handleDownloadPdf = useCallback(async () => {
     if (nodes.length === 0 && drawings.length === 0) return;
     setIsExporting(true);
@@ -770,32 +808,25 @@ function InnerDiagramCanvas() {
       const img = new Image();
       img.src = dataUrl;
       img.onload = () => {
-        const pdfWidth = img.width;
-        const pdfHeight = img.height;
-        const orientation = pdfWidth > pdfHeight ? 'l' : 'p';
-
-        const pdf = new jsPDF({
-          orientation,
-          unit: 'px',
-          format: [pdfWidth, pdfHeight],
-        });
-
-        pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
-        pdf.save('drawarc-diagram.pdf');
+        const orientation = img.width > img.height ? 'l' : 'p';
+        const pdf = new jsPDF(orientation, 'pt', [img.width, img.height]);
+        pdf.addImage(dataUrl, 'PNG', 0, 0, img.width, img.height);
+        pdf.save('drawarc-architecture.pdf');
         showToast('PDF exported successfully!', 'success');
-        setIsExporting(false);
       };
     } catch (err) {
       console.error('Failed to export PDF', err);
       showToast('Failed to export PDF', 'error');
+    } finally {
       setIsExporting(false);
     }
   }, [nodes.length, drawings.length, theme, showToast]);
 
+  // Export PNG
   const handleDownloadPng = useCallback(async () => {
     if (nodes.length === 0 && drawings.length === 0) return;
     setIsExporting(true);
-    showToast('Rendering PNG image...', 'info');
+    showToast('Generating PNG image...', 'info');
 
     try {
       const el = document.querySelector('.react-flow__viewport') as HTMLElement;
@@ -808,10 +839,10 @@ function InnerDiagramCanvas() {
       });
 
       const link = document.createElement('a');
-      link.download = 'drawarc-diagram.png';
+      link.download = 'drawarc-architecture.png';
       link.href = dataUrl;
       link.click();
-      showToast('PNG image exported successfully!', 'success');
+      showToast('PNG image downloaded!', 'success');
     } catch (err) {
       console.error('Failed to export PNG', err);
       showToast('Failed to export PNG', 'error');
@@ -820,16 +851,7 @@ function InnerDiagramCanvas() {
     }
   }, [nodes.length, drawings.length, theme, showToast]);
 
-  const handleDownloadExcalidraw = useCallback(() => {
-    if (nodes.length === 0 && drawings.length === 0) return;
-    const success = downloadExcalidrawFile(nodes, edges, drawings);
-    if (success) {
-      showToast('Exported to Excalidraw format (.excalidraw)!', 'success');
-    } else {
-      showToast('Failed to export to Excalidraw', 'error');
-    }
-  }, [nodes, edges, drawings, showToast]);
-
+  // Clear Canvas
   const handleClearCanvas = () => {
     if (nodes.length === 0 && drawings.length === 0) return;
     if (window.confirm('Clear all elements and drawings on canvas?')) {
@@ -842,10 +864,7 @@ function InnerDiagramCanvas() {
     }
   };
 
-  // Selected Element for PropertyBar
-  const selectedNode = useMemo(() => nodes.find((n) => n.selected) || null, [nodes]);
-  const selectedStroke = useMemo(() => drawings.find((d) => d.id === selectedStrokeId) || null, [drawings, selectedStrokeId]);
-
+  // Duplicate Selected Element
   const handleDuplicateSelected = () => {
     if (selectedNode) {
       const duplicatedNode: Node = {
@@ -875,18 +894,84 @@ function InnerDiagramCanvas() {
     }
   };
 
+  // Layer Stacking (Z-Index)
+  const handleBringToFront = useCallback(() => {
+    if (selectedNode) {
+      const maxZ = Math.max(10, ...nodes.map((n) => Number(n.style?.zIndex) || 10));
+      const updated = nodes.map((n) => (n.id === selectedNode.id ? { ...n, style: { ...n.style, zIndex: maxZ + 10 } } : n));
+      setNodes(updated);
+      pushStateUpdate(updated, edges, drawings, true);
+    } else if (selectedStrokeId) {
+      const maxZ = Math.max(5, ...drawings.map((d) => d.zIndex || 5));
+      const updated = drawings.map((d) => (d.id === selectedStrokeId ? { ...d, zIndex: maxZ + 10 } : d));
+      setDrawings(updated);
+      pushStateUpdate(nodes, edges, updated, true);
+    }
+  }, [selectedNode, selectedStrokeId, nodes, edges, drawings, pushStateUpdate, setNodes]);
+
+  const handleBringForward = useCallback(() => {
+    if (selectedNode) {
+      const updated = nodes.map((n) => (n.id === selectedNode.id ? { ...n, style: { ...n.style, zIndex: (Number(n.style?.zIndex) || 10) + 1 } } : n));
+      setNodes(updated);
+      pushStateUpdate(updated, edges, drawings, true);
+    } else if (selectedStrokeId) {
+      const updated = drawings.map((d) => (d.id === selectedStrokeId ? { ...d, zIndex: (d.zIndex || 5) + 1 } : d));
+      setDrawings(updated);
+      pushStateUpdate(nodes, edges, updated, true);
+    }
+  }, [selectedNode, selectedStrokeId, nodes, edges, drawings, pushStateUpdate, setNodes]);
+
+  const handleSendBackward = useCallback(() => {
+    if (selectedNode) {
+      const updated = nodes.map((n) => (n.id === selectedNode.id ? { ...n, style: { ...n.style, zIndex: Math.max(1, (Number(n.style?.zIndex) || 10) - 1) } } : n));
+      setNodes(updated);
+      pushStateUpdate(updated, edges, drawings, true);
+    } else if (selectedStrokeId) {
+      const updated = drawings.map((d) => (d.id === selectedStrokeId ? { ...d, zIndex: Math.max(1, (d.zIndex || 5) - 1) } : d));
+      setDrawings(updated);
+      pushStateUpdate(nodes, edges, updated, true);
+    }
+  }, [selectedNode, selectedStrokeId, nodes, edges, drawings, pushStateUpdate, setNodes]);
+
+  const handleSendToBack = useCallback(() => {
+    if (selectedNode) {
+      const minZ = Math.min(10, ...nodes.map((n) => Number(n.style?.zIndex) || 10));
+      const updated = nodes.map((n) => (n.id === selectedNode.id ? { ...n, style: { ...n.style, zIndex: Math.max(1, minZ - 10) } } : n));
+      setNodes(updated);
+      pushStateUpdate(updated, edges, drawings, true);
+    } else if (selectedStrokeId) {
+      const minZ = Math.min(5, ...drawings.map((d) => d.zIndex || 5));
+      const updated = drawings.map((d) => (d.id === selectedStrokeId ? { ...d, zIndex: Math.max(1, minZ - 5) } : d));
+      setDrawings(updated);
+      pushStateUpdate(nodes, edges, updated, true);
+    }
+  }, [selectedNode, selectedStrokeId, nodes, edges, drawings, pushStateUpdate, setNodes]);
+
+  // Update Node and Stroke
+  const handleUpdateNode = useCallback((updated: Node) => {
+    const updatedNodes = nodes.map((n) => (n.id === updated.id ? updated : n));
+    setNodes(updatedNodes);
+    pushStateUpdate(updatedNodes, edges, drawings, true);
+  }, [nodes, edges, drawings, pushStateUpdate, setNodes]);
+
+  const handleUpdateStroke = useCallback((updated: DrawingStroke) => {
+    const updatedDrawings = drawings.map((d) => (d.id === updated.id ? updated : d));
+    setDrawings(updatedDrawings);
+    pushStateUpdate(nodes, edges, updatedDrawings, true);
+  }, [nodes, edges, drawings, pushStateUpdate]);
+
   const isLight = theme === 'light';
 
   return (
     <div 
-      className={`flex h-screen w-full overflow-hidden font-sans relative select-none transition-colors duration-200 ${
+      className={`flex h-screen w-screen overflow-hidden font-sans relative select-none transition-colors duration-200 ${
         isLight ? 'bg-white text-slate-800' : 'bg-neutral-950 text-neutral-100'
       }`}
     >
       {/* Toast Notification */}
       {toast && (
         <div 
-          className={`fixed top-24 md:top-20 right-4 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-2xl backdrop-blur-2xl border shadow-2xl transition-all duration-300 animate-in fade-in slide-in-from-top-4 text-xs font-medium ${
+          className={`fixed top-20 right-4 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-2xl backdrop-blur-2xl border shadow-2xl transition-all duration-300 animate-in fade-in slide-in-from-top-4 text-xs font-medium ${
             toast.type === 'error' 
               ? 'bg-rose-950/90 text-rose-200 border-rose-800/60 shadow-rose-950/50' 
               : toast.type === 'success'
@@ -913,45 +998,27 @@ function InnerDiagramCanvas() {
         </div>
       )}
 
-      {/* Property Formatting Bar (Visible when element selected) */}
-      <PropertyBar
-        selectedNode={selectedNode}
-        selectedStroke={selectedStroke}
-        onUpdateNode={(updated) => {
-          const updatedNodes = nodes.map((n) => (n.id === updated.id ? updated : n));
-          setNodes(updatedNodes);
-          pushStateUpdate(updatedNodes, edges, drawings, true);
+      {/* 1. Slim Left Navigation Rail & Drawer (Canva & Modern Studio Style) */}
+      <StudioLeftRail
+        activeTab={activeLeftTab}
+        onSelectTab={setActiveLeftTab}
+        onCloseDrawer={() => setActiveLeftTab(null)}
+        onAddNode={handleAddNodeFromRail}
+        onAddShape={handleAddShapeFromRail}
+        onAddSticky={handleAddStickyFromRail}
+        onAddTextQuick={handleAddTextQuick}
+        interactionMode={interactionMode}
+        setInteractionMode={setInteractionMode}
+        activeColor={activeColor}
+        setActiveColor={setActiveColor}
+        onSelectTemplate={(tmplPrompt) => {
+          setPrompt(tmplPrompt);
+          handleGenerate(undefined, tmplPrompt);
         }}
-        onUpdateStroke={(updated) => {
-          const updatedDrawings = drawings.map((d) => (d.id === updated.id ? updated : d));
-          setDrawings(updatedDrawings);
-          pushStateUpdate(nodes, edges, updatedDrawings, true);
-        }}
-        onDuplicate={handleDuplicateSelected}
-        onDelete={handleDeleteSelected}
-        onToggleLayers={() => setIsLayersOpen(!isLayersOpen)}
-        isLayersOpen={isLayersOpen}
-        theme={theme}
-      />
-
-      {/* Sidebar: Elements Drawer */}
-      <Sidebar 
-        isOpen={isSidebarOpen} 
-        onClose={() => setIsSidebarOpen(false)}
-        onAddNode={handleAddNodeFromSidebar}
-        onAddShape={handleAddShapeFromSidebar}
-        onAddSticky={handleAddStickyFromSidebar}
-        theme={theme}
-      />
-
-      {/* Layers Panel: Stacking Order */}
-      <LayersPanel
-        isOpen={isLayersOpen}
-        onClose={() => setIsLayersOpen(false)}
         nodes={nodes}
         drawings={drawings}
-        selectedId={selectedNode ? selectedNode.id : selectedStrokeId}
-        onSelect={(id, type) => {
+        selectedId={selectedNode?.id || selectedStrokeId}
+        onSelectElement={(id, type) => {
           if (type === 'drawing') {
             setSelectedStrokeId(id);
             setNodes(nodes.map((n) => ({ ...n, selected: false })));
@@ -969,6 +1036,329 @@ function InnerDiagramCanvas() {
           pushStateUpdate(nodes, edges, updatedDrawings, true);
         }}
         theme={theme}
+      />
+
+      {/* 2. Main Studio Work Area */}
+      <div className="flex-1 flex flex-col h-full w-full relative pl-16 md:pl-18 select-none">
+        
+        {/* Top Header */}
+        <header className="absolute top-0 left-16 md:left-18 right-0 z-20 p-2 md:p-3 pointer-events-none flex flex-col items-center gap-2">
+          <div className="w-full max-w-7xl flex items-center justify-between gap-2 pointer-events-auto">
+            
+            {/* Left Brand Badge + Undo/Redo */}
+            <div className="flex items-center gap-2">
+              <div className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl backdrop-blur-xl border shadow-lg ${
+                isLight ? 'bg-white/90 border-slate-200' : 'bg-neutral-900/90 border-neutral-800'
+              }`}>
+                <NextImage 
+                  src="/logo.png" 
+                  alt="DrawArc Logo" 
+                  width={20}
+                  height={20}
+                  className={`w-5 h-5 object-contain ${isLight ? '' : 'brightness-0 invert'}`} 
+                />
+                <span className="font-bold text-xs tracking-tight hidden sm:inline">DrawArc</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
+                  Studio Pro
+                </span>
+              </div>
+
+              {/* Undo & Redo Quick Buttons */}
+              <div className={`flex items-center gap-0.5 p-1 rounded-2xl backdrop-blur-xl border shadow-lg ${
+                isLight ? 'bg-white/90 border-slate-200' : 'bg-neutral-900/90 border-neutral-800'
+              }`}>
+                <button
+                  onClick={handleUndo}
+                  disabled={!canUndo}
+                  className={`p-1.5 rounded-xl transition-all ${
+                    canUndo 
+                      ? isLight ? 'text-slate-700 hover:bg-slate-100' : 'text-neutral-200 hover:bg-neutral-800' 
+                      : 'opacity-30 cursor-not-allowed'
+                  }`}
+                  title="Undo (Ctrl+Z / ⌘Z)"
+                  aria-label="Undo"
+                >
+                  <Undo2 className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                  className={`p-1.5 rounded-xl transition-all ${
+                    canRedo 
+                      ? isLight ? 'text-slate-700 hover:bg-slate-100' : 'text-neutral-200 hover:bg-neutral-800' 
+                      : 'opacity-30 cursor-not-allowed'
+                  }`}
+                  title="Redo (Ctrl+Y / ⌘Shift+Z)"
+                  aria-label="Redo"
+                >
+                  <Redo2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Center: Infallible AI Architecture Prompt Input */}
+            <form 
+              onSubmit={(e) => handleGenerate(e)} 
+              className={`flex-1 max-w-xl flex items-center backdrop-blur-2xl p-1 md:p-1.5 rounded-2xl border shadow-2xl transition-all focus-within:ring-2 focus-within:ring-indigo-500/30 ${
+                isLight 
+                  ? 'bg-white/90 border-slate-200 focus-within:border-indigo-500/60' 
+                  : 'bg-neutral-900/90 border-neutral-800 focus-within:border-indigo-500/60'
+              }`}
+            >
+              <div className="pl-2.5 text-indigo-500">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <input
+                type="text"
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Generate architecture (e.g. Netflix video stream, Uber rides)..."
+                className="flex-1 bg-transparent border-none outline-none px-2.5 py-1 text-xs md:text-sm"
+                disabled={isLoading}
+              />
+              <button
+                type="submit"
+                disabled={isLoading || !prompt.trim()}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-500/20 disabled:text-neutral-400 text-white px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 font-medium text-xs shadow-md shrink-0 active:scale-95"
+              >
+                {isLoading ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span className="hidden sm:inline">Synthesizing...</span>
+                  </>
+                ) : (
+                  <span>AI Generate</span>
+                )}
+              </button>
+            </form>
+
+            {/* Right Controls: Share, Excalidraw, Theme, Inspector Toggle */}
+            <div className="flex items-center gap-1.5">
+              {/* Share / Invite Button */}
+              <button
+                onClick={() => setIsShareOpen(true)}
+                className="px-3 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 text-xs font-bold"
+                title="Generate Sharable Editable Link for Multiplayer Collaboration"
+              >
+                <Share2 className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Share</span>
+                {Object.keys(collaborators).length > 0 && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                )}
+              </button>
+
+              {/* Direct Open in Excalidraw */}
+              <button
+                onClick={handleOpenExcalidraw}
+                disabled={isExporting}
+                className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg flex items-center gap-1.5 text-xs font-semibold ${
+                  isLight ? 'bg-white/90 hover:bg-slate-100 border-slate-200 text-amber-600' : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-amber-400'
+                }`}
+                title="Open directly in Excalidraw (copies JSON to clipboard & opens excalidraw.com)"
+              >
+                <PenTool className="w-4 h-4 text-amber-500" />
+                <span className="hidden xl:inline">Excalidraw</span>
+              </button>
+
+              {/* Light / Dark Mode Toggle */}
+              <button
+                onClick={toggleTheme}
+                className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg ${
+                  isLight
+                    ? 'bg-white/90 hover:bg-slate-100 text-amber-500 border-slate-200'
+                    : 'bg-neutral-900/90 hover:bg-neutral-800 text-indigo-400 border-neutral-800'
+                }`}
+                title={`Switch to ${isLight ? 'Dark Mode' : 'Light Mode'}`}
+                aria-label="Toggle theme"
+              >
+                {isLight ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+              </button>
+
+              {/* Delete Selected Item Button */}
+              {(selectedNode || selectedStroke) && (
+                <button
+                  onClick={handleDeleteSelected}
+                  className="p-2 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/30 shadow-lg transition-all"
+                  title="Delete Selected Item (Delete / Backspace)"
+                  aria-label="Delete Selected Item"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+
+              {/* Edit Inspector Toggle Tab */}
+              <button
+                onClick={() => setIsEditPanelOpen(!isEditPanelOpen)}
+                className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg flex items-center gap-1 text-xs font-semibold ${
+                  isEditPanelOpen
+                    ? 'bg-indigo-600 text-white border-indigo-500 shadow-indigo-600/30'
+                    : isLight
+                    ? 'bg-white/90 hover:bg-slate-100 border-slate-200 text-slate-700'
+                    : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
+                }`}
+                title="Toggle Edit Inspector Panel"
+              >
+                <SlidersHorizontal className="w-4 h-4" />
+                <span className="hidden lg:inline">Edit</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Preset Chips */}
+          {nodes.length === 0 && drawings.length === 0 && (
+            <div className="w-full max-w-4xl flex items-center justify-center gap-1.5 overflow-x-auto py-1 px-2 pointer-events-auto custom-scrollbar">
+              <span className="text-[11px] font-medium opacity-60 whitespace-nowrap mr-1 hidden sm:inline">
+                Suggested Architectures:
+              </span>
+              {PRESET_PROMPTS.map((preset) => (
+                <button
+                  key={preset.label}
+                  onClick={() => {
+                    setPrompt(preset.prompt);
+                    handleGenerate(undefined, preset.prompt);
+                  }}
+                  disabled={isLoading}
+                  className={`px-2.5 py-1 rounded-xl border text-[11px] font-medium whitespace-nowrap transition-all shadow-md active:scale-95 ${
+                    isLight
+                      ? 'bg-white/90 hover:bg-slate-100 border-slate-200 text-slate-700'
+                      : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
+                  }`}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </header>
+
+        {/* Main Infinite Canvas (Clear Solid Background, Zero Dots) */}
+        <div 
+          className="flex-1 h-full w-full relative bg-clean-canvas" 
+          ref={reactFlowWrapper}
+          onPointerMove={handlePointerMoveCanvas}
+        >
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onInit={setReactFlowInstance}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onPaneClick={handlePaneClick}
+            onNodeClick={(_, node) => {
+              if (interactionMode === 'eraser') {
+                const updatedNodes = nodes.filter((n) => n.id !== node.id);
+                const updatedEdges = edges.filter((e) => e.source !== node.id && e.target !== node.id);
+                setNodes(updatedNodes);
+                setEdges(updatedEdges);
+                pushStateUpdate(updatedNodes, updatedEdges, drawings, true);
+                showToast('Node removed', 'info');
+              }
+            }}
+            onEdgeClick={(_, edge) => {
+              if (interactionMode === 'eraser') {
+                const updatedEdges = edges.filter((e) => e.id !== edge.id);
+                setEdges(updatedEdges);
+                pushStateUpdate(nodes, updatedEdges, drawings, true);
+                showToast('Connection removed', 'info');
+              }
+            }}
+            panOnDrag={interactionMode === 'pan'}
+            selectionOnDrag={interactionMode === 'select'}
+            panOnScroll={interactionMode === 'select' || interactionMode === 'eraser'}
+            nodeTypes={nodeTypes}
+            fitView
+            minZoom={0.05}
+            maxZoom={3}
+            deleteKeyCode={['Backspace', 'Delete']}
+            className="bg-clean-canvas"
+          >
+            <Controls className="!rounded-2xl !overflow-hidden !shadow-2xl" />
+
+            {/* Multiplayer Remote Cursors Overlay */}
+            <LiveCursors 
+              collaborators={collaborators} 
+              currentUserId={currentUser.id} 
+            />
+
+            {/* Freehand SVG Drawing Overlay synced with ReactFlow */}
+            <CanvasOverlayDrawing
+              mode={interactionMode}
+              drawings={drawings}
+              onDrawingsChange={(newDrawings) => {
+                setDrawings(newDrawings);
+                pushStateUpdate(nodes, edges, newDrawings, true);
+              }}
+              activeColor={activeColor}
+              activeWidth={activeWidth}
+              activeOpacity={100}
+              selectedStrokeId={selectedStrokeId}
+              onSelectStroke={(id) => {
+                setSelectedStrokeId(id);
+                setNodes(nodes.map((n) => ({ ...n, selected: false })));
+              }}
+              reactFlowInstance={reactFlowInstance}
+              wrapperRef={reactFlowWrapper}
+            />
+
+            {/* Bottom-right Status Badge */}
+            <Panel position="bottom-right" className="text-[11px] p-2 flex items-center gap-2 pointer-events-none opacity-80">
+              <span className="hidden sm:inline">DrawArc · Architecture & Whiteboard Studio</span>
+              {(nodes.length > 0 || drawings.length > 0) && (
+                <span className={`border px-2 py-0.5 rounded-lg font-mono text-[10px] ${
+                  isLight ? 'bg-white border-slate-200 text-slate-600' : 'bg-neutral-900 border-neutral-800 text-neutral-400'
+                }`}>
+                  {nodes.length} nodes · {drawings.length} strokes
+                </span>
+              )}
+            </Panel>
+          </ReactFlow>
+        </div>
+
+        {/* Bottom Tool Dock */}
+        <Toolbar 
+          mode={interactionMode} 
+          setMode={setInteractionMode}
+          activeColor={activeColor}
+          setActiveColor={setActiveColor}
+          activeWidth={activeWidth}
+          setActiveWidth={setActiveWidth}
+          theme={theme}
+        />
+      </div>
+
+      {/* 3. Dedicated Right-Side Properties & Edit Inspector */}
+      <EditInspector
+        isOpen={isEditPanelOpen}
+        onToggleOpen={() => setIsEditPanelOpen(!isEditPanelOpen)}
+        selectedNode={selectedNode}
+        selectedStroke={selectedStroke}
+        onUpdateNode={handleUpdateNode}
+        onUpdateStroke={handleUpdateStroke}
+        onDuplicate={handleDuplicateSelected}
+        onDelete={handleDeleteSelected}
+        onBringToFront={handleBringToFront}
+        onBringForward={handleBringForward}
+        onSendBackward={handleSendBackward}
+        onSendToBack={handleSendToBack}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onOpenExcalidraw={handleOpenExcalidraw}
+        onExportPng={handleDownloadPng}
+        onExportPdf={handleDownloadPdf}
+        onClearCanvas={handleClearCanvas}
+        layoutDirection={layoutDirection}
+        onToggleLayoutDirection={toggleLayoutDirection}
+        onApplyLayout={() => applyLayout(nodes, edges, layoutDirection)}
+        nodesCount={nodes.length}
+        strokesCount={drawings.length}
+        roomId={roomId}
+        onAddTextQuick={handleAddTextQuick}
+        onAddStickyQuick={handleAddStickyFromRail}
+        onAddShapeQuick={(shape) => handleAddShapeFromRail(shape, shape)}
       />
 
       {/* Collaboration Share Modal */}
@@ -997,371 +1387,6 @@ function InnerDiagramCanvas() {
         }}
         theme={theme}
       />
-
-      {/* Bottom Interactive Whiteboard Toolbar */}
-      <Toolbar 
-        mode={interactionMode} 
-        setMode={setInteractionMode}
-        activeColor={activeColor}
-        setActiveColor={setActiveColor}
-        activeWidth={activeWidth}
-        setActiveWidth={setActiveWidth}
-        theme={theme}
-      />
-
-      {/* Top Floating App Bar */}
-      <header className="absolute top-0 left-0 right-0 z-30 p-2 md:p-3 pointer-events-none flex flex-col items-center gap-2">
-        <div className="w-full max-w-7xl flex items-center justify-between gap-2 pointer-events-auto">
-          
-          {/* Left Brand & Palette Toggle */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-              className={`p-2 rounded-2xl backdrop-blur-xl border transition-all flex items-center gap-1.5 shadow-lg ${
-                isSidebarOpen 
-                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-indigo-600/30' 
-                  : isLight
-                  ? 'bg-white/90 hover:bg-slate-100 text-slate-700 border-slate-200'
-                  : 'bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 border-neutral-800 hover:text-white'
-              }`}
-              title="Toggle Elements Palette"
-              aria-label="Toggle Elements Palette"
-            >
-              <PanelLeft className="w-4 h-4" />
-              <span className="hidden sm:inline text-xs font-semibold">Elements</span>
-            </button>
-
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl backdrop-blur-xl border shadow-lg ${
-              isLight ? 'bg-white/90 border-slate-200' : 'bg-neutral-900/90 border-neutral-800'
-            }`}>
-              <NextImage 
-                src="/logo.png" 
-                alt="DrawArc Logo" 
-                width={20}
-                height={20}
-                className={`w-5 h-5 object-contain ${isLight ? '' : 'brightness-0 invert'}`} 
-              />
-              <span className="font-bold text-xs tracking-tight hidden sm:inline">DrawArc</span>
-              <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded-md bg-indigo-500/10 text-indigo-500 border border-indigo-500/20">
-                Studio Pro
-              </span>
-            </div>
-
-            {/* Undo & Redo Quick Buttons */}
-            <div className={`flex items-center gap-0.5 p-1 rounded-2xl backdrop-blur-xl border shadow-lg ${
-              isLight ? 'bg-white/90 border-slate-200' : 'bg-neutral-900/90 border-neutral-800'
-            }`}>
-              <button
-                onClick={handleUndo}
-                disabled={!canUndo}
-                className={`p-1.5 rounded-xl transition-all ${
-                  canUndo 
-                    ? isLight ? 'text-slate-700 hover:bg-slate-100' : 'text-neutral-200 hover:bg-neutral-800' 
-                    : 'opacity-30 cursor-not-allowed'
-                }`}
-                title="Undo (Ctrl+Z / ⌘Z)"
-                aria-label="Undo"
-              >
-                <Undo2 className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                onClick={handleRedo}
-                disabled={!canRedo}
-                className={`p-1.5 rounded-xl transition-all ${
-                  canRedo 
-                    ? isLight ? 'text-slate-700 hover:bg-slate-100' : 'text-neutral-200 hover:bg-neutral-800' 
-                    : 'opacity-30 cursor-not-allowed'
-                }`}
-                title="Redo (Ctrl+Y / ⌘Shift+Z)"
-                aria-label="Redo"
-              >
-                <Redo2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* Center: AI Architecture Prompt */}
-          <form 
-            onSubmit={(e) => handleGenerate(e)} 
-            className={`flex-1 max-w-xl flex items-center backdrop-blur-2xl p-1 md:p-1.5 rounded-2xl border shadow-2xl transition-all focus-within:ring-2 focus-within:ring-indigo-500/30 ${
-              isLight 
-                ? 'bg-white/90 border-slate-200 focus-within:border-indigo-500/60' 
-                : 'bg-neutral-900/90 border-neutral-800 focus-within:border-indigo-500/60'
-            }`}
-          >
-            <div className="pl-2.5 text-indigo-500">
-              <Sparkles className="w-4 h-4" />
-            </div>
-            <input
-              type="text"
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Generate architecture (e.g. Netflix video stream, Uber rides)..."
-              className="flex-1 bg-transparent border-none outline-none px-2.5 py-1 text-xs md:text-sm"
-              disabled={isLoading}
-            />
-            <button
-              type="submit"
-              disabled={isLoading || !prompt.trim()}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-neutral-500/20 disabled:text-neutral-400 text-white px-3 py-1.5 rounded-xl transition-all flex items-center gap-1.5 font-medium text-xs shadow-md shrink-0 active:scale-95"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                  <span className="hidden sm:inline">Synthesizing...</span>
-                </>
-              ) : (
-                <span>AI Generate</span>
-              )}
-            </button>
-          </form>
-
-          {/* Right Controls: Share, Theme, Layers, Delete, Export */}
-          <div className="flex items-center gap-1.5">
-            {/* Share / Invite Button */}
-            <button
-              onClick={() => setIsShareOpen(true)}
-              className="px-3 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-1.5 text-xs font-bold"
-              title="Generate Sharable Editable Link for Multiplayer Collaboration"
-            >
-              <Share2 className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Share</span>
-              {Object.keys(collaborators).length > 0 && (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              )}
-            </button>
-
-            {/* Layers Toggle */}
-            <button
-              onClick={() => setIsLayersOpen(!isLayersOpen)}
-              className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg ${
-                isLayersOpen
-                  ? 'bg-indigo-600 text-white border-indigo-500 shadow-indigo-600/30'
-                  : isLight
-                  ? 'bg-white/90 hover:bg-slate-100 text-slate-700 border-slate-200'
-                  : 'bg-neutral-900/90 hover:bg-neutral-800 text-neutral-300 border-neutral-800'
-              }`}
-              title="Toggle Layers Stack"
-            >
-              <Layers className="w-4 h-4" />
-            </button>
-
-            {/* Light / Dark Mode Toggle */}
-            <button
-              onClick={toggleTheme}
-              className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg ${
-                isLight
-                  ? 'bg-white/90 hover:bg-slate-100 text-amber-500 border-slate-200'
-                  : 'bg-neutral-900/90 hover:bg-neutral-800 text-indigo-400 border-neutral-800'
-              }`}
-              title={`Switch to ${isLight ? 'Dark Mode' : 'Light Mode'}`}
-              aria-label="Toggle theme"
-            >
-              {isLight ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
-            </button>
-
-            {/* Delete Selected Item Button */}
-            {(selectedNode || selectedStroke) && (
-              <button
-                onClick={handleDeleteSelected}
-                className="p-2 rounded-2xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-500 border border-rose-500/30 shadow-lg transition-all"
-                title="Delete Selected Item (Delete / Backspace)"
-                aria-label="Delete Selected Item"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
-
-            {/* Layout Reorganization */}
-            {nodes.length > 0 && (
-              <>
-                <button
-                  onClick={() => applyLayout(nodes, edges, layoutDirection)}
-                  className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg ${
-                    isLight ? 'bg-white/90 hover:bg-slate-100 border-slate-200' : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800'
-                  }`}
-                  title="Auto-reorganize layout"
-                >
-                  <LayoutGrid className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={toggleLayoutDirection}
-                  className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg flex items-center gap-1 ${
-                    isLight ? 'bg-white/90 hover:bg-slate-100 border-slate-200' : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800'
-                  }`}
-                  title={`Switch Layout: currently ${layoutDirection === 'TB' ? 'Top-to-Bottom' : 'Left-to-Right'}`}
-                >
-                  <ArrowRightLeft className="w-4 h-4" />
-                  <span className="text-[10px] font-mono font-bold hidden lg:inline">{layoutDirection}</span>
-                </button>
-              </>
-            )}
-
-            {/* Export Actions */}
-            {(nodes.length > 0 || drawings.length > 0) && (
-              <>
-                <button
-                  onClick={handleDownloadExcalidraw}
-                  disabled={isExporting}
-                  className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg flex items-center gap-1.5 text-xs font-semibold ${
-                    isLight ? 'bg-white/90 hover:bg-slate-100 border-slate-200 text-amber-600' : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-amber-400'
-                  }`}
-                  title="Export to Excalidraw format (.excalidraw)"
-                >
-                  <PenTool className="w-4 h-4 text-amber-500" />
-                  <span className="hidden xl:inline">Excalidraw</span>
-                </button>
-
-                <button
-                  onClick={handleDownloadPng}
-                  disabled={isExporting}
-                  className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg hidden md:flex items-center gap-1 text-xs ${
-                    isLight ? 'bg-white/90 hover:bg-slate-100 border-slate-200' : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800'
-                  }`}
-                  title="Export as PNG image"
-                >
-                  <ImageIcon className="w-4 h-4" />
-                  <span className="hidden lg:inline">PNG</span>
-                </button>
-
-                <button
-                  onClick={handleDownloadPdf}
-                  disabled={isExporting}
-                  className="px-2.5 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-lg shadow-indigo-600/20 flex items-center gap-1.5 text-xs font-semibold"
-                  title="Export high-res PDF"
-                >
-                  <FileDown className="w-4 h-4" />
-                  <span className="hidden sm:inline">PDF</span>
-                </button>
-
-                <button
-                  onClick={handleClearCanvas}
-                  className={`p-2 rounded-2xl backdrop-blur-xl border transition-all shadow-lg hover:text-rose-500 ${
-                    isLight ? 'bg-white/90 hover:bg-rose-50 border-slate-200 text-slate-400' : 'bg-neutral-900/90 hover:bg-rose-950/40 border-neutral-800 text-neutral-400'
-                  }`}
-                  title="Clear All Elements"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Suggestion Preset Chips */}
-        {nodes.length === 0 && drawings.length === 0 && (
-          <div className="w-full max-w-4xl flex items-center justify-center gap-1.5 overflow-x-auto py-1 px-2 pointer-events-auto custom-scrollbar">
-            <span className="text-[11px] font-medium opacity-60 whitespace-nowrap mr-1 hidden sm:inline">
-              Suggested Architectures:
-            </span>
-            {PRESET_PROMPTS.map((preset) => (
-              <button
-                key={preset.label}
-                onClick={() => {
-                  setPrompt(preset.prompt);
-                  handleGenerate(undefined, preset.prompt);
-                }}
-                disabled={isLoading}
-                className={`px-2.5 py-1 rounded-xl border text-[11px] font-medium whitespace-nowrap transition-all shadow-md active:scale-95 ${
-                  isLight
-                    ? 'bg-white/90 hover:bg-slate-100 border-slate-200 text-slate-700'
-                    : 'bg-neutral-900/90 hover:bg-neutral-800 border-neutral-800 text-neutral-300'
-                }`}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-        )}
-      </header>
-
-      {/* Main Infinite Canvas Viewport (Clear Background, Zero Dots) */}
-      <div 
-        className="flex-1 h-full w-full relative bg-clean-canvas" 
-        ref={reactFlowWrapper}
-        onPointerMove={handlePointerMoveCanvas}
-      >
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onInit={setReactFlowInstance}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onPaneClick={handlePaneClick}
-          onNodeClick={(_, node) => {
-            if (interactionMode === 'eraser') {
-              const updatedNodes = nodes.filter((n) => n.id !== node.id);
-              const updatedEdges = edges.filter((e) => e.source !== node.id && e.target !== node.id);
-              setNodes(updatedNodes);
-              setEdges(updatedEdges);
-              pushStateUpdate(updatedNodes, updatedEdges, drawings, true);
-              showToast('Node removed', 'info');
-            }
-          }}
-          onEdgeClick={(_, edge) => {
-            if (interactionMode === 'eraser') {
-              const updatedEdges = edges.filter((e) => e.id !== edge.id);
-              setEdges(updatedEdges);
-              pushStateUpdate(nodes, updatedEdges, drawings, true);
-              showToast('Connection removed', 'info');
-            }
-          }}
-          panOnDrag={interactionMode === 'pan'}
-          selectionOnDrag={interactionMode === 'select'}
-          panOnScroll={interactionMode === 'select' || interactionMode === 'eraser'}
-          nodeTypes={nodeTypes}
-          fitView
-          minZoom={0.05}
-          maxZoom={3}
-          deleteKeyCode={['Backspace', 'Delete']}
-          className="bg-clean-canvas"
-        >
-          <Controls className="!rounded-2xl !overflow-hidden !shadow-2xl" />
-
-          {/* Multiplayer Remote Cursors Overlay */}
-          <LiveCursors 
-            collaborators={collaborators} 
-            currentUserId={currentUser.id} 
-          />
-
-          {/* Freehand SVG Drawing Overlay synced with ReactFlow */}
-          <CanvasOverlayDrawing
-            mode={interactionMode}
-            drawings={drawings}
-            onDrawingsChange={(newDrawings) => {
-              setDrawings(newDrawings);
-              pushStateUpdate(nodes, edges, newDrawings, true);
-            }}
-            activeColor={activeColor}
-            activeWidth={activeWidth}
-            activeOpacity={100}
-            selectedStrokeId={selectedStrokeId}
-            onSelectStroke={(id) => {
-              setSelectedStrokeId(id);
-              setNodes(nodes.map((n) => ({ ...n, selected: false })));
-            }}
-            reactFlowInstance={reactFlowInstance}
-            wrapperRef={reactFlowWrapper}
-          />
-
-          {/* Bottom-right Status Badge */}
-          <Panel position="bottom-right" className="text-[11px] p-2 flex items-center gap-2 pointer-events-none opacity-80">
-            <span className="hidden sm:inline">DrawArc · Architecture & Whiteboard Studio</span>
-            {(nodes.length > 0 || drawings.length > 0) && (
-              <span className={`border px-2 py-0.5 rounded-lg font-mono text-[10px] ${
-                isLight ? 'bg-white border-slate-200 text-slate-600' : 'bg-neutral-900 border-neutral-800 text-neutral-400'
-              }`}>
-                {nodes.length} nodes · {drawings.length} strokes
-              </span>
-            )}
-          </Panel>
-        </ReactFlow>
-      </div>
     </div>
   );
 }
